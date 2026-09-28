@@ -13,8 +13,8 @@ build-*/
 *.bin
 
 # Liens symboliques locaux (à ne pas push sur git)
-support
-external
+fractal_*/support
+fractal_*/external
 
 # Fichiers système macOS
 .DS_Store
