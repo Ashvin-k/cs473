@@ -1,10 +1,10 @@
 # BEGIN: You can modify the following region
-PROJECT = hello
+PROJECT = fractal_fxpt
 TOOLCHAIN ?= or1k-elf
 DEBUG ?= 0
 # TARGET can be either OR1300 (CS-473) or OR1420 (CS-476)
 TARGET ?= OR1300
-CFLAGS ?= 
+CFLAGS ?=
 LDFLAGS ?=
 ASFLAGS ?=
 
@@ -12,7 +12,6 @@ CSRCS += $(wildcard src/*.c)
 CSRCS += $(wildcard src/coro/*.c)
 CSRCS += $(wildcard src/taskman/*.c)
 # add other directories here...
-
 
 SSRCS += $(wildcard src/*.s)
 SSRCS += $(wildcard src/coro/*.s)

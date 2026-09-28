@@ -1,0 +1,23 @@
+# Dossiers de compilation générés par make
+build-release-or1300/
+build-*/
+
+# Fichiers objets et dépendances
+*.o
+*.d
+*.out
+
+# Fichiers exécutables et mémoires de la carte FPGA
+*.elf
+*.cmem
+*.bin
+
+# Liens symboliques locaux (à ne pas push sur git)
+support
+external
+
+# Fichiers système macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride

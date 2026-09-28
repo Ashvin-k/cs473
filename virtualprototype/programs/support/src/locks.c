@@ -15,8 +15,8 @@ int get_lock(uint32_t lockId) {
   uint8_t res;
   uint8_t cpuId = SPR_READ(9)&0xF;
   do {
-    asm volatile ("l.cas %[out1],%[in1],%[in2],0":[out1]"=r"(res):
-                  [in1]"r"(&locks[lockId]),[in2]"r"(cpuId));
+    res = cpuId; locks[lockId] = cpuId; /*
+    */
   } while (res != cpuId);
   return 0;
 }
