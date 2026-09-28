@@ -33,8 +33,10 @@ uint16_t calc_mandelbrot_point_soft(fxpt_8_24 cx, fxpt_8_24 cy, uint16_t n_max) 
   int32_t xx, yy, two_xy;
   
   // Mathematical limits in Q8.24 format: 4.0 and 2.0
-  int32_t limit = 4 * 16777216; 
-  int32_t escape = 2 * 16777216;
+  //int32_t limit = 4 * 16777216; 
+  //int32_t escape = 2 * 16777216;
+  int32_t limit = 4 * (1 << 24); 
+  int32_t escape = 2 * (1 << 24);
 
   do {
     // FAST ESCAPE SECURITY: Stop immediately to prevent any 32-bit overflow
