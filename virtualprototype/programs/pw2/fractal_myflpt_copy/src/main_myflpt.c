@@ -1,4 +1,4 @@
-#include "fractal_fxpt.h"
+#include "fractal_myflpt.h"
 #include "swap.h"
 #include "vga.h"
 #include "cache.h"
@@ -8,20 +8,20 @@
 // Constants describing the output device
 const int SCREEN_WIDTH = 512;   //!< screen width
 const int SCREEN_HEIGHT = 512;  //!< screen height
+const uint16_t N_MAX = 64;      //!< maximum number of iterations
 
 int main() {
    volatile unsigned int *vga = (unsigned int *) 0x50000020;
    rgb565 frameBuffer[SCREEN_WIDTH*SCREEN_HEIGHT];
    int i;
-   
-   // Clean variable definition evaluated at compile-time (no magic numbers, no floats)
-   fxpt_4_28 cx_0  = -2 * (1 << 28);                  // Corresponds to -2.0
-   fxpt_4_28 cy_0  = -(3 * (1 << 28)) / 2;            // Corresponds to -1.5
-   fxpt_4_28 delta = (3 * (1 << 28)) / SCREEN_WIDTH;  // Corresponds to 3.0 / 512
-   uint16_t n_max  = 64; 
+
+   // Constants initialized safely without compiler float operations
+   myflpt cx_0  = create_myflpt(-2, 0);     // -2.0  = -2 * 2^0
+   myflpt cy_0  = create_myflpt(-3, -1);    // -1.5  = -3 * 2^-1
+   myflpt delta = create_myflpt(3, -9);     // 3/512 =  3 * 2^-9
    
    vga_clear();
-   printf("STARTING FRACTAL DRAWING...\n");
+   printf("Starting drawing a fractal\n");
    
 #ifdef __OR1300__   
    /* enable the caches */
@@ -37,23 +37,15 @@ int main() {
    vga[2] = swap_u32(1);
    vga[3] = swap_u32((unsigned int)&frameBuffer[0]);
    
-   /* Clear screen (set to black) */
+   /* Clear screen */
    for (i = 0 ; i < SCREEN_WIDTH*SCREEN_HEIGHT ; i++) frameBuffer[i]=0;
 
-   /* Push the cleared black cache to the physical RAM/screen immediately */
-#ifdef __OR1300__
-   dcache_flush();
-#endif
-
-   // The processor calculates and draws the fractal
    draw_fractal(frameBuffer, SCREEN_WIDTH, SCREEN_HEIGHT, 
                 &calc_mandelbrot_point_soft, &iter_to_colour, 
-                cx_0, cy_0, delta, n_max);
+                cx_0, cy_0, delta, N_MAX);
 
-   /* MANDATORY: Push the final computed result to the screen */
 #ifdef __OR1300__
    dcache_flush();
 #endif
-
    printf("Done\n");
 }

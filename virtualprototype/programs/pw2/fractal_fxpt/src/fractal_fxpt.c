@@ -7,12 +7,12 @@ int32_t abs_32(int32_t val) {
 }
 
 //! \brief 100% native 32-bit multiplication, ultra-fast and safe
-int32_t mul_q8_24(int32_t a, int32_t b) {
+int32_t mul_q4_28(int32_t a, int32_t b) {
     int32_t abs_a = abs_32(a);
     int32_t abs_b = abs_32(b);
     
     // Safe bit-shift on positive numbers followed by hardware multiplication
-    int32_t res = (abs_a >> 12) * (abs_b >> 12);
+    int32_t res = (abs_a >> 14) * (abs_b >> 14);
     
     // Restore the correct sign
     if ((a < 0 && b > 0) || (a > 0 && b < 0)) {
@@ -26,17 +26,15 @@ int32_t mul_q8_24(int32_t a, int32_t b) {
 //! \param  cy    y-coordinate
 //! \param  n_max maximum number of iterations
 //! \return       number of performed iterations at coordinate (cx, cy)
-uint16_t calc_mandelbrot_point_soft(fxpt_8_24 cx, fxpt_8_24 cy, uint16_t n_max) {
+uint16_t calc_mandelbrot_point_soft(fxpt_4_28 cx, fxpt_4_28 cy, uint16_t n_max) {
   int32_t x = cx;
   int32_t y = cy;
   uint16_t n = 0;
   int32_t xx, yy, two_xy;
   
-  // Mathematical limits in Q8.24 format: 4.0 and 2.0
-  //int32_t limit = 4 * 16777216; 
-  //int32_t escape = 2 * 16777216;
-  int32_t limit = 4 * (1 << 24); 
-  int32_t escape = 2 * (1 << 24);
+  // Mathematical limits in Q4.28 format: 4.0 and 2.0
+  int32_t limit = 4 * (1 << 28); 
+  int32_t escape = 2 * (1 << 28);
 
   do {
     // FAST ESCAPE SECURITY: Stop immediately to prevent any 32-bit overflow
@@ -44,9 +42,9 @@ uint16_t calc_mandelbrot_point_soft(fxpt_8_24 cx, fxpt_8_24 cy, uint16_t n_max) 
         break;
     }
 
-    xx = mul_q8_24(x, x);
-    yy = mul_q8_24(y, y);
-    two_xy = mul_q8_24(x, y) * 2;
+    xx = mul_q4_28(x, x);
+    yy = mul_q4_28(y, y);
+    two_xy = mul_q4_28(x, y) * 2;
 
     x = xx - yy + cx;
     y = two_xy + cy;
@@ -111,11 +109,11 @@ rgb565 iter_to_colour1(uint16_t iter, uint16_t n_max) {
 //! \brief  Draw fractal into frame buffer
 void draw_fractal(rgb565 *fbuf, int width, int height,
                   calc_frac_point_p cfp_p, iter_to_colour_p i2c_p,
-                  fxpt_8_24 cx_0, fxpt_8_24 cy_0, fxpt_8_24 delta, uint16_t n_max) {
+                  fxpt_4_28 cx_0, fxpt_4_28 cy_0, fxpt_4_28 delta, uint16_t n_max) {
   rgb565 *pixel = fbuf;
-  fxpt_8_24 cy = cy_0;
+  fxpt_4_28 cy = cy_0;
   for (int k = 0; k < height; ++k) {
-    fxpt_8_24 cx = cx_0;
+    fxpt_4_28 cx = cx_0;
     for(int i = 0; i < width; ++i) {
       uint16_t n_iter = (*cfp_p)(cx, cy, n_max);
       rgb565 colour = (*i2c_p)(n_iter, n_max);
