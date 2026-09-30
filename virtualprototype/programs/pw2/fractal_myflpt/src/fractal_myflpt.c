@@ -1,89 +1,112 @@
 #include "fractal_myflpt.h"
 #include <swap.h>
 
-//! \brief Secure absolute value for 32-bit integers
-static inline int32_t abs_32(int32_t val) {
-    return (val < 0) ? -val : val;
+/* Provided by this file further down; used here to normalize in one step
+   instead of looping.  Not modified. */
+int ilog2(unsigned x);
+
+//! \brief Absolute value of a myflpt (mantissa sign only)
+static myflpt myflpt_abs(myflpt a) {
+    return (MYFLPT_MAN(a) < 0) ? myflpt_neg(a) : a;
 }
 
 //! \brief Create and normalize our custom floating point
+//!
+//! ilog2() gives the position of the leading bit, so the shift needed to bring
+//! the mantissa into [2^14, 2^15) is known in one step -- no loop.
+//! The mantissa is normalized on its magnitude and the sign is reapplied
+//! afterwards, which keeps |mantissa| strictly below 2^15 and therefore keeps
+//! myflpt_neg() exact.
 myflpt create_myflpt(int32_t man, int32_t exp) {
-    if (man == 0) return 0;
-    
-    int32_t abs_m = abs_32(man);
-    
-    // Prevent overflow: Shift down if mantissa exceeds 23-bit magnitude
-    while (abs_m > 0x7FFFFF) {
-        man /= 2;
-        exp += 1;
-        abs_m = abs_32(man);
-    }
-    
-    // Maximize precision: Shift up to fill 23 bits
-    while (abs_m > 0 && abs_m <= 0x3FFFFF) {
-        man *= 2;
-        exp -= 1;
-        abs_m = abs_32(man);
-    }
-    
-    return (exp << 24) | (man & 0x00FFFFFF);
-}
+    int32_t neg, s;
+    uint32_t m;
 
-//! \brief Add two custom floats
-myflpt myflpt_add(myflpt a, myflpt b) {
-    if (a == 0) return b;
-    if (b == 0) return a;
-    
-    int32_t ea = a >> 24;
-    int32_t eb = b >> 24;
-    int32_t ma = (a << 8) >> 8;
-    int32_t mb = (b << 8) >> 8;
-    
-    // Align exponents
-    if (ea > eb) {
-        int shift = ea - eb;
-        if (shift >= 31) return a;
-        mb >>= shift; 
-        eb = ea;
-    } else if (eb > ea) {
-        int shift = eb - ea;
-        if (shift >= 31) return b;
-        ma >>= shift;
-        ea = eb;
-    }
-    
-    return create_myflpt(ma + mb, ea);
+    if (man == 0) return 0;
+
+    neg = (man < 0);
+    m   = (uint32_t)(neg ? -man : man);
+
+    s = ilog2(m) - (MYFLPT_MAN_BITS - 1);
+    if (s > 0)      { m >>= s;  exp += s;  }
+    else if (s < 0) { m <<= -s; exp -= -s; }
+
+    return MYFLPT_PACK(neg ? -(int32_t)m : (int32_t)m, exp);
 }
 
 //! \brief Negate a custom float
 myflpt myflpt_neg(myflpt a) {
-    if (a == 0) return 0;
-    int32_t exp = a >> 24;
-    int32_t man = (a << 8) >> 8;
-    return (exp << 24) | ((-man) & 0x00FFFFFF);
+    return (a == 0) ? 0 : MYFLPT_PACK(-MYFLPT_MAN(a), MYFLPT_EXP(a));
+}
+
+//! \brief Add two custom floats
+//!
+//! Past a 15-bit exponent gap the smaller operand cannot change the result, so
+//! it is dropped rather than shifted away.  After alignment both mantissas are
+//! below 2^15, so ma + mb cannot overflow.
+myflpt myflpt_add(myflpt a, myflpt b) {
+    int32_t ea, eb, ma, mb, d;
+
+    if (a == 0) return b;
+    if (b == 0) return a;
+
+    ea = MYFLPT_EXP(a); eb = MYFLPT_EXP(b);
+    ma = MYFLPT_MAN(a); mb = MYFLPT_MAN(b);
+
+    d = ea - eb;
+    if (d > 0) {
+        if (d > MYFLPT_MAN_BITS) return a;
+        mb >>= d;
+    } else if (d < 0) {
+        if (-d > MYFLPT_MAN_BITS) return b;
+        ma >>= -d;
+        ea = eb;
+    }
+
+    return create_myflpt(ma + mb, ea);
 }
 
 //! \brief Multiply two custom floats
+//!
+//! Both mantissas are in [2^14, 2^15), so the product is exact in an int32_t
+//! (|p| <= 2^30) and lies in [2^28, 2^30): only two octaves.  The renormalizing
+//! shift is therefore always 14 or 15, chosen by a single comparison, and
+//! create_myflpt() is not needed at all.
 myflpt myflpt_mul(myflpt a, myflpt b) {
+    int32_t p, ap, e;
+
     if (a == 0 || b == 0) return 0;
-    
-    int32_t ea = a >> 24;
-    int32_t eb = b >> 24;
-    int32_t ma = (a << 8) >> 8;
-    int32_t mb = (b << 8) >> 8;
-    
-    // Shift mantissas down before multiplication to avoid 32-bit overflow
-    int32_t ma_shr = ma / 256;
-    int32_t mb_shr = mb / 256;
-    
-    return create_myflpt(ma_shr * mb_shr, ea + eb + 16);
+
+    p = MYFLPT_MAN(a) * MYFLPT_MAN(b);
+    e = MYFLPT_EXP(a) + MYFLPT_EXP(b);
+
+    ap = (p < 0) ? -p : p;
+    if (ap < (1 << 29)) { ap >>= (MYFLPT_MAN_BITS - 1); e += (MYFLPT_MAN_BITS - 1); }
+    else                { ap >>= MYFLPT_MAN_BITS;       e += MYFLPT_MAN_BITS;       }
+
+    return MYFLPT_PACK((p < 0) ? -ap : ap, e);
 }
 
 //! \brief Check if custom float a > b
+//!
+//! Compared field by field rather than by building a difference, which would
+//! cost an addition and a full renormalization.
 int myflpt_gt(myflpt a, myflpt b) {
-    myflpt diff = myflpt_add(a, myflpt_neg(b));
-    int32_t man = (diff << 8) >> 8;
-    return man > 0;
+    int32_t ma, mb, ea, eb;
+
+    if (a == b) return 0;
+
+    ma = MYFLPT_MAN(a);
+    mb = MYFLPT_MAN(b);
+
+    if (ma >= 0 && mb <  0) return 1;
+    if (ma <  0 && mb >= 0) return 0;
+    if (ma == 0) return 0;               /* a is zero, so b is positive */
+    if (mb == 0) return 1;               /* b is zero, so a is positive */
+
+    ea = MYFLPT_EXP(a);
+    eb = MYFLPT_EXP(b);
+    if (ea != eb) return (ma > 0) ? (ea > eb) : (ea < eb);
+    return ma > mb;
 }
 
 //! \brief  Mandelbrot fractal point calculation function
@@ -91,29 +114,30 @@ uint16_t calc_mandelbrot_point_soft(myflpt cx, myflpt cy, uint16_t n_max) {
   myflpt x = cx;
   myflpt y = cy;
   uint16_t n = 0;
-  myflpt xx, yy, two_xy;
-  
+  myflpt xx = 0, yy = 0, two_xy;
+
   myflpt limit = create_myflpt(4, 0);  // 4.0
   myflpt escape = create_myflpt(2, 0); // 2.0
 
   do {
     // Fast escape to avoid overflow
-    myflpt abs_x = (((x << 8) >> 8) < 0) ? myflpt_neg(x) : x;
-    myflpt abs_y = (((y << 8) >> 8) < 0) ? myflpt_neg(y) : y;
-    if (myflpt_gt(abs_x, escape) || myflpt_gt(abs_y, escape)) {
+    if (myflpt_gt(myflpt_abs(x), escape) || myflpt_gt(myflpt_abs(y), escape)) {
         break;
     }
 
     xx = myflpt_mul(x, x);
     yy = myflpt_mul(y, y);
+
+    // 2 * x * y : the mantissa occupies bits 0..15, so adding 1<<16 increments
+    // the exponent without ever carrying into the mantissa field.
     two_xy = myflpt_mul(x, y);
-    two_xy = myflpt_add(two_xy, two_xy); // 2 * x * y
+    if (two_xy != 0) two_xy += (1 << 16);
 
     x = myflpt_add(myflpt_add(xx, myflpt_neg(yy)), cx);
     y = myflpt_add(two_xy, cy);
     ++n;
   } while (!myflpt_gt(myflpt_add(xx, yy), limit) && (n < n_max));
-  
+
   return n;
 }
 
