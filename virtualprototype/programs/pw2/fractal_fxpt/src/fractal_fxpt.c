@@ -39,6 +39,7 @@ uint16_t calc_mandelbrot_point_soft(fxpt_4_28 cx, fxpt_4_28 cy, uint16_t n_max) 
   do {
     // FAST ESCAPE SECURITY: Stop immediately to prevent any 32-bit overflow
     if (abs_32(x) > escape || abs_32(y) > escape) {
+        ++n;
         break;
     }
 

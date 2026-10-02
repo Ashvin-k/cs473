@@ -1,16 +1,49 @@
-# `fractal_myflpt` — format flottant maison
+# 2.3 — Format flottant personnalisé
 
-Calcul de l'ensemble de Mandelbrot sur OR1300, qui ne possède pas d'unité
-flottante. La version `fractal_flpt` utilise le type `float` du C, ce qui force
-le compilateur à appeler les routines logicielles de libgcc (`__addsf3`,
-`__mulsf3`, `__subsf3`, `__lesf2`). Ce projet remplace ces appels par un format
-flottant défini sur mesure, taillé pour ce seul calcul.
+## Objectif
+
+Définir notre propre format flottant sur 32 bits et l'utiliser pour le calcul de
+l'ensemble de Mandelbrot. La contrainte posée par l'énoncé est explicite : le
+temps d'exécution doit être **inférieur à celui obtenu avec la bibliothèque
+intégrée**, c'est-à-dire avec le type `float` du C.
 
 ---
 
-## 1. Le format
+## 1. Le point de départ : pourquoi le `float` est lent ici
 
-Un `myflpt` est un `int32_t` découpé en deux demi-mots :
+Le processeur OR1300 ne possède pas d'unité de calcul flottant. Chaque opération
+de la version `fractal_flpt` est donc émulée : le compilateur remplace les
+additions et multiplications par des appels aux routines logicielles de sa
+bibliothèque — `__mulsf3`, `__addsf3`, `__subsf3`, `__lesf2`. Un désassemblage du
+binaire montre que le corps de la boucle d'itération n'exécute pratiquement
+aucune arithmétique propre : il enchaîne ces appels, dont les corps comptent
+plusieurs centaines d'instructions chacun.
+
+Cette taille s'explique entièrement par ce que la norme IEEE 754 impose et que
+notre calcul n'utilise jamais :
+
+| Mécanisme IEEE 754 | Utile pour Mandelbrot ? |
+|---|---|
+| Nombres dénormalisés | non |
+| Valeurs NaN et infinies | non |
+| Arrondi au plus proche pair (bits de garde et de collage) | non |
+| Bit de mantisse implicite, à insérer puis retirer | non |
+| Exposant biaisé, à corriger à chaque opération | non |
+| Mantisse en signe-magnitude | non |
+
+Notre format est construit en retirant précisément ces six postes. **C'est là
+qu'est le gain**, et non dans un réglage fin des largeurs de champ.
+
+> **Figure suggérée.** Un extrait annoté du désassemblage de la boucle en `float`,
+> faisant apparaître la succession d'appels à libgcc, avec le nombre
+> d'instructions de chaque routine en regard. Elle se produit avec
+> `or1k-elf-objdump -d` et illustre le problème en une image.
+
+---
+
+## 2. Le format retenu
+
+Un nombre occupe 32 bits, découpés sur la frontière des demi-mots :
 
 ```
  31                    16 15                      0
@@ -22,216 +55,253 @@ Un `myflpt` est un `int32_t` découpé en deux demi-mots :
         valeur = mantisse × 2^exposant
 ```
 
-Une valeur non nulle est **normalisée** : `2^14 ≤ |mantisse| < 2^15`. Elle porte
-donc toujours 15 bits significatifs, quelle que soit sa magnitude. Le zéro est
-le mot entièrement nul, et c'est la seule valeur dont la mantisse vaut 0.
+Toute valeur non nulle est **normalisée** : la magnitude de sa mantisse
+appartient à l'intervalle allant de 2¹⁴ à 2¹⁵ exclu. Elle porte donc toujours
+quinze bits significatifs, quelle que soit son ordre de grandeur. Le zéro est le
+mot entièrement nul.
 
-### Trois exemples d'encodage
-
-**1.5**, construit par `create_myflpt(3, -1)` puisque 1.5 = 3 × 2⁻¹ :
-
-```
-magnitude 3 = 0b11, bit de poids fort en position 1
-il doit arriver en position 14  ->  décalage de 13 vers la gauche
-mantisse = 3 << 13 = 24576        exposant = -1 - 13 = -14
-vérification : 24576 × 2^-14 = 24576 / 16384 = 1.5          ✓
-mot : exposant -14 = 0xFFF2, mantisse 24576 = 0x6000  ->  0xFFF26000
-```
-
-**−2.0**, construit par `create_myflpt(-2, 0)` :
+Deux exemples d'encodage, tels que les produit la fonction de construction :
 
 ```
-signe négatif, magnitude 2 = 0b10, bit de poids fort en position 1
-décalage de 13  ->  16384, exposant 0 - 13 = -13
-le signe est réappliqué à la fin  ->  mantisse = -16384
-vérification : -16384 × 2^-13 = -2.0                        ✓
-mot : exposant -13 = 0xFFF3, mantisse -16384 = 0xC000  ->  0xFFF3C000
+ 1.5  =  3 × 2^-1
+       magnitude 3, bit de poids fort en position 1
+       il doit arriver en position 14  ->  décalage de 13 vers la gauche
+       mantisse = 24576,  exposant = -14
+       vérification : 24576 × 2^-14 = 1.5                      ✓
+
+-2.0  =  -2 × 2^0
+       magnitude 2, décalage de 13  ->  16384, exposant -13
+       le signe est réappliqué après normalisation  ->  -16384
+       vérification : -16384 × 2^-13 = -2.0                    ✓
 ```
 
-**3/512**, construit par `create_myflpt(3, -9)` :
-
-```
-magnitude 3, décalage de 13  ->  24576, exposant -9 - 13 = -22
-vérification : 24576 × 2^-22 = 0.005859375 = 3/512          ✓
-```
-
-Remarquer que `create_myflpt(3, -1)` ne stocke pas le couple `(3, -1)` tel quel :
-la normalisation pousse la mantisse jusqu'à remplir ses 15 bits et compense sur
+On notera que la fonction ne stocke pas le couple fourni tel quel : la
+normalisation pousse la mantisse jusqu'à remplir ses quinze bits et compense sur
 l'exposant. C'est ce qui garantit la précision maximale pour les opérations
 suivantes.
 
+> **Figure suggérée.** Le schéma du mot de 32 bits ci-dessus, accompagné d'un
+> exemple d'encodage complet montrant la valeur réelle, la mantisse, l'exposant
+> et le mot hexadécimal. C'est la figure qui rend le format compréhensible d'un
+> coup d'œil.
+
 ---
 
-## 2. Pourquoi 15 bits de magnitude
+## 3. La justification des quinze bits de mantisse
 
-C'est le cœur du choix de format, et il découle d'une seule contrainte.
+Ce choix n'est pas arbitraire. Il découle d'une contrainte unique, et tout le
+reste du format en est la conséquence.
 
-### La borne du produit
+### La contrainte
 
-Pour que le produit de deux mantisses tienne dans un `int32_t` **sans décalage
-préalable**, il faut :
-
-```
-|ma| · |mb| < 2^31
-```
-
-Avec des mantisses normalisées sous 2^k, le pire cas est 2^(2k). La condition
-devient `2k ≤ 30`, donc **k ≤ 15**.
-
-Quinze bits est donc le maximum compatible avec une multiplication exacte en une
-seule instruction `l.mul`. Au-delà, il faudrait soit jeter des bits avant de
-multiplier — ce qui détruirait la précision que le format prétend offrir — soit
-décomposer le produit en trois multiplications.
-
-### La conséquence en cascade : plus de recherche de bit
-
-Si les deux mantisses sont dans `[2^14, 2^15)`, leur produit est nécessairement
-dans :
+Pour que le produit de deux mantisses tienne dans un entier signé de 32 bits
+**sans décalage préalable**, il faut :
 
 ```
-[2^14 · 2^14 ; 2^15 · 2^15[  =  [2^28 ; 2^30[
+|ma| · |mb| < 2³¹
 ```
 
-Deux octaves seulement. Ramener ce produit dans `[2^14, 2^15)` demande donc
-toujours un décalage de 14 **ou** de 15, jamais autre chose. Une comparaison
-suffit à trancher, et `myflpt_mul` n'a jamais besoin d'appeler la routine de
-normalisation.
+Avec des mantisses normalisées sous 2^k, le pire cas vaut 2^(2k). La condition
+s'écrit donc 2k ≤ 30, soit **k ≤ 15**.
 
-### Le choix du complément à deux
+Quinze bits est ainsi la plus grande mantisse compatible avec une multiplication
+exacte en une seule instruction machine. Au-delà, il faudrait soit amputer les
+opérandes avant de les multiplier — ce qui reviendrait à payer un champ de
+mantisse que le calcul n'exploiterait pas, exactement le défaut identifié dans la
+version à virgule fixe — soit décomposer le produit en trois multiplications.
 
-La mantisse est signée en complément à deux, et non en signe-magnitude comme le
-fait IEEE 754 avec son bit 31 séparé.
+### La conséquence en cascade
 
-La raison est l'addition. Une fois les exposants alignés, additionner se réduit
-à `ma + mb` : une instruction. Avec un bit de signe séparé, il faudrait comparer
-les deux magnitudes, décider laquelle soustraire de laquelle, puis recalculer le
-signe du résultat. C'est une part importante de ce qui rend `__addsf3` coûteux.
+Cette contrainte produit un second effet, moins évident et tout aussi important.
+Puisque les deux mantisses appartiennent à une seule octave, leur produit est
+confiné à deux octaves :
 
-L'exposant est lui aussi en complément à deux, sans biais : pas de constante à
-ajouter puis retrancher à chaque opération.
+```
+[2¹⁴ · 2¹⁴ ; 2¹⁵ · 2¹⁵[  =  [2²⁸ ; 2³⁰[
+```
 
-### Pourquoi l'exposant hérite de 16 bits
+Ramener ce produit dans l'intervalle de normalisation demande donc toujours un
+décalage de 14 **ou** de 15, jamais autre chose. Une simple comparaison suffit à
+trancher, et la multiplication n'a **jamais** besoin de rechercher la position du
+bit de poids fort ni d'appeler la routine de normalisation générale.
+
+### Le codage du signe
+
+Nous avons écarté la représentation en signe et magnitude — celle d'IEEE 754, et
+celle proposée par défaut dans l'énoncé avec son bit 31 isolé — au profit d'une
+mantisse en complément à deux.
+
+L'argument est l'addition, opération la plus fréquente de l'algorithme. Une fois
+les exposants alignés, additionner deux mantisses en complément à deux se réduit
+à une addition entière : une instruction. Avec un bit de signe séparé, il
+faudrait comparer les deux magnitudes, déterminer le sens de la soustraction,
+puis recalculer le signe du résultat. Ce traitement représente une part
+substantielle du coût de `__addsf3`.
+
+L'exposant est codé de la même manière, en complément à deux et **sans biais**,
+ce qui évite d'ajouter puis de retrancher une constante à chaque opération.
+
+### La largeur de l'exposant
 
 Une fois la mantisse fixée à un champ de 16 bits, les 16 restants vont à
-l'exposant. C'est surdimensionné : les valeurs manipulées par l'algorithme vont
-d'environ 10⁻⁹ à 8, ce qui correspond à des exposants compris entre −44 et −11
-environ. Un champ signé de 8 bits suffirait.
+l'exposant. C'est surdimensionné : les grandeurs manipulées s'étendent des
+petites valeurs issues des annulations près du bord de l'ensemble jusqu'à une
+borne de l'ordre de huit, ce qui ne réclame guère plus de sept ou huit bits.
 
-Mais ces bits n'ont nulle part où aller de mieux : les rendre à la mantisse
-casserait la contrainte de la section précédente. Autant les laisser à
-l'exposant, ce qui a l'avantage d'aligner les deux champs sur les demi-mots et
-de laisser de la marge si l'on zoome plus tard.
-
-### Ce que le format ne fait pas
-
-| | IEEE 754 binary32 | `myflpt` |
-|---|---|---|
-| signe | bit 31 séparé | porté par la mantisse |
-| exposant | 8 bits, biaisé (excès-127) | 16 bits, complément à deux |
-| mantisse | 23 bits + bit caché implicite | 16 bits explicites |
-| dénormaux | oui | non |
-| NaN, ±Inf | oui | non |
-| arrondi | au plus proche pair | troncature |
-
-Chaque ligne « non » est du code que les routines de libgcc exécutent et que
-`myflpt` n'a pas. C'est là qu'est le gain de performance, pas dans un réglage
-fin des largeurs de champ.
+Mais ces bits ne peuvent pas être rendus à la mantisse sans invalider le
+raisonnement précédent. Les affecter à l'exposant a au moins deux avantages :
+aligner les deux champs sur les demi-mots, et préserver une marge confortable si
+l'on souhaite zoomer.
 
 ---
 
-## 3. Les fonctions
+## 4. L'implémentation
 
-### `create_myflpt(man, exp)` — normalisation
+### La normalisation, en une étape au lieu d'une boucle
 
-Construit un `myflpt` normalisé à partir d'une mantisse et d'un exposant
-quelconques. C'est le point de passage de toute valeur produite par une
-addition.
-
-La normalisation se fait **en une étape**, pas en boucle : `ilog2` donne la
-position du bit de poids fort de la magnitude, et le décalage nécessaire est la
-différence entre cette position et 14.
+C'est l'optimisation la plus rentable. La position du bit de poids fort de la
+magnitude est obtenue par la fonction `ilog2`, déjà présente dans le fichier
+fourni et jusqu'alors inutilisée ; le décalage nécessaire s'en déduit
+immédiatement par différence avec la position cible.
 
 ```
 m = 100,  exp = 0
-ilog2(100) = 6        (100 = 0b1100100, bit de poids fort en position 6)
-décalage  = 6 - 14 = -8   ->  vers la gauche de 8
-mantisse = 100 << 8 = 25600     exposant = 0 - 8 = -8
+ilog2(100) = 6        (100 = 0b1100100)
+décalage = 6 - 14 = -8  ->  vers la gauche de 8
+mantisse = 25600,  exposant = -8
 vérification : 25600 × 2^-8 = 100                            ✓
 ```
 
-Deux détails d'implémentation :
+La version naïve y parvient par deux boucles successives qui déplacent la
+mantisse d'un bit à la fois. Sur un cœur simple, sans prédiction de branchement,
+chaque tour de ces boucles coûte un branchement non prédit et une division
+signée — et la normalisation est appelée à chaque addition.
 
-**La normalisation porte sur la magnitude**, le signe étant réappliqué à la fin.
-Si l'on décalait directement une valeur négative, le décalage arithmétique
-arrondit vers le bas et peut produire exactement −32768. Or +32768 n'est pas
-représentable dans un champ de 16 bits signé : la négation deviendrait fausse.
-En normalisant `|man|`, la mantisse reste strictement dans `(−2^15, 2^15)` et
-`myflpt_neg` est toujours exacte.
+Un détail d'implémentation mérite d'être signalé : la normalisation opère sur la
+**valeur absolue**, le signe étant réappliqué en fin de parcours. Décaler
+directement une valeur négative produirait, par arrondi vers le bas du décalage
+arithmétique, la valeur la plus négative représentable sur seize bits, dont
+l'opposé n'est pas représentable : la négation deviendrait fausse. En travaillant
+sur la magnitude, la mantisse reste strictement à l'intérieur du domaine et
+toutes les opérations de signe demeurent exactes.
 
-**`ilog2` n'est pas modifiée.** Elle était déjà fournie dans le fichier et
-inutilisée ; elle sert exactement à ça.
+### La multiplication
 
-### `myflpt_mul(a, b)` — multiplication
-
-Une seule multiplication 32×32, exacte, suivie d'un décalage conditionnel.
+Une seule multiplication 32 × 32, exacte, suivie d'un décalage conditionnel.
+Aucun appel à la routine de normalisation, grâce à la propriété des deux octaves
+établie en section 3.
 
 ```
 1.5 × (-2.0)
-  ma = 24576  (exp -14)      mb = -16384  (exp -13)
-  p  = 24576 × (-16384) = -402653184        exact, |p| < 2^31
-  e  = -14 + (-13) = -27
-  |p| = 402653184 < 2^29  ->  décalage de 14, e += 14
-  |p| >> 14 = 24576         e = -13
-  signe négatif  ->  mantisse = -24576
+  mantisses 24576 et -16384, exposants -14 et -13
+  produit = -402653184,  exact,  |p| < 2³¹
+  |p| < 2²⁹  ->  décalage de 14,  exposant -27 + 14 = -13
+  mantisse = -24576
   résultat : -24576 × 2^-13 = -3.0                           ✓
 ```
 
-Aucun appel à `create_myflpt` : la propriété des deux octaves garantit que le
-résultat est déjà normalisé.
+### L'addition
 
-### `myflpt_add(a, b)` — addition
-
-Aligne les exposants, additionne les mantisses, renormalise.
+Alignement des exposants, addition des mantisses, renormalisation.
 
 ```
 1.5 + 3/512
-  a = (24576, -14)        b = (24576, -22)
-  écart d'exposant = -14 - (-22) = 8
-  la mantisse de b est décalée de 8  ->  24576 >> 8 = 96
-  somme = 24576 + 96 = 24672,  exposant -14
-  24672 est déjà dans [16384, 32768)  ->  aucune renormalisation
-  résultat : 24672 × 2^-14 = 1.505859375
-  vérification : 1.5 + 0.005859375 = 1.505859375             ✓
+  exposants -14 et -22,  écart de 8
+  la plus petite mantisse est décalée de 8 : 24576 >> 8 = 96
+  somme = 24576 + 96 = 24672,  déjà normalisée
+  résultat : 24672 × 2^-14 = 1.505859375                     ✓
 ```
 
-Au-delà d'un écart d'exposant de 15, la plus petite des deux valeurs ne peut plus
-influencer le résultat : elle est abandonnée directement plutôt que décalée
-jusqu'à disparaître. Après alignement, les deux mantisses sont sous 2^15, donc
+Au-delà d'un écart d'exposant de quinze, la plus petite des deux valeurs ne peut
+plus influencer le résultat : elle est abandonnée directement plutôt que décalée
+jusqu'à disparaître. Après alignement, les deux mantisses sont sous 2¹⁵, donc
 leur somme ne peut pas déborder.
 
-### `myflpt_gt(a, b)` — comparaison
+### La comparaison
 
-Compare les deux nombres champ par champ : d'abord les signes, puis les
-exposants, puis les mantisses. Grâce à la normalisation, l'exposant est
-déterminant dès que les signes sont identiques.
+Elle procède champ par champ : d'abord les signes, puis les exposants, puis les
+mantisses. Grâce à la normalisation, l'exposant est déterminant dès que les
+signes coïncident.
 
-La version précédente construisait la différence `a + (−b)` et testait son signe,
-ce qui déclenchait une addition **et** une normalisation complète à chaque
-comparaison — trois fois par itération de Mandelbrot.
+La version naïve construit la différence des deux nombres et teste son signe, ce
+qui déclenche une addition **et** une normalisation complète à chaque
+comparaison, alors que l'algorithme en effectue trois par itération.
 
-### `calc_mandelbrot_point_soft` — la boucle
-
-La structure de l'algorithme est inchangée. Une seule optimisation arithmétique
-y a été introduite : le doublement de `2·x·y`.
+### Le doublement du terme croisé
 
 Doubler un flottant revient à incrémenter son exposant. Comme la mantisse occupe
-les bits 0 à 15, ajouter 2^16 au mot incrémente l'exposant sans jamais propager
-de retenue dans la mantisse. Une addition d'entier remplace donc un appel à
-`myflpt_add`, qui aurait aligné des exposants puis renormalisé.
+les bits de poids faible du mot, ajouter 2¹⁶ incrémente l'exposant sans jamais
+propager de retenue dans le champ de mantisse. Une addition entière remplace
+donc un appel à la routine d'addition flottante, qui aurait aligné des exposants
+puis renormalisé.
 
 ---
 
-## 4. Fichiers
+## 5. Résultats
+
+### Validation du calcul
+
+La correction du format se vérifie par comparaison visuelle avec la version en
+virgule flottante native : les deux rendus doivent être indiscernables, et la
+surface occupée par l'ensemble identique.
+
+> **Figure suggérée — indispensable.** Les deux rendus côte à côte,
+> `fractal_flpt` et `fractal_myflpt`, avec une légende indiquant leur
+> équivalence visuelle. Sans elle, le chiffre de performance n'a aucune valeur :
+> on peut toujours aller plus vite en calculant faux.
+
+### Performance
+
+| version | temps de rendu |
+|---|---|
+| `fractal_flpt` (virgule flottante émulée) | *à compléter* |
+| `fractal_myflpt` (format personnalisé) | *à compléter* |
+| rapport | *à compléter* |
+
+Mesures effectuées dans des conditions identiques, en chronométrant l'intervalle
+entre les deux messages qui encadrent le rendu sur la liaison série.
+
+> **Figure suggérée.** Un histogramme à trois barres comparant `fractal_flpt`,
+> `fractal_fxpt` et `fractal_myflpt`. Il synthétise les deux exercices et montre
+> où se situe chaque approche.
+
+### Vérification de l'absence d'émulation
+
+Un contrôle simple confirme que l'objectif de l'énoncé est atteint sur le fond et
+pas seulement sur le chronomètre : les symboles `__addsf3`, `__mulsf3`,
+`__subsf3` et `__lesf2` ne figurent plus dans le binaire de `fractal_myflpt`,
+alors qu'ils sont présents dans celui de `fractal_flpt`. La vérification se fait
+avec `or1k-elf-nm`.
+
+---
+
+## 6. Limites et comparaison avec la virgule fixe
+
+**La précision est inférieure à celle de Q4.28 à ce niveau de zoom.** Ce n'est
+pas un défaut d'implémentation mais une propriété des deux familles de formats.
+La virgule fixe offre une résolution absolue constante ; le flottant offre une
+résolution **relative** constante, donc une résolution absolue proportionnelle à
+la magnitude. Pour des valeurs d'ordre 1, qui dominent le calcul à ce cadrage, le
+pas de Q4.28 est plus fin que celui d'une mantisse de quinze bits.
+
+**L'intérêt du flottant est la plage dynamique, pas la précision.** Son avantage
+apparaît en zoomant : lorsque l'écart entre deux pixels voisins descend sous la
+résolution de la virgule fixe, deux colonnes adjacentes reçoivent la même valeur
+de `c` et l'image se fige, alors que le flottant continue de les distinguer.
+
+> **Figure suggérée — si le temps le permet.** Un même zoom profond rendu dans
+> les deux formats. Si la virgule fixe produit des aplats uniformes là où le
+> flottant conserve du détail, c'est la démonstration visuelle de l'intérêt du
+> second. C'est l'argument qui justifie l'existence de cet exercice.
+
+**Le champ d'exposant est surdimensionné.** Sept ou huit bits suffiraient à ce
+cadrage. Les bits excédentaires ne peuvent cependant pas être transférés à la
+mantisse sans perdre la multiplication en une instruction ; ils constituent une
+marge pour le zoom plutôt qu'un gaspillage.
+
+---
+
+## Fichiers et compilation
 
 | fichier | rôle |
 |---|---|
@@ -241,8 +311,6 @@ de retenue dans la mantisse. Une addition d'entier remplace donc un appel à
 
 `ilog2` et les quatre fonctions de conversion en couleur sont reprises telles
 quelles, conformément à l'énoncé.
-
-## 5. Compilation
 
 ```
 make          # produit build-release-or1300/fractal_myflpt.mem
