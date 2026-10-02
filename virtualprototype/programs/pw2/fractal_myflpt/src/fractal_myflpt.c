@@ -122,7 +122,8 @@ uint16_t calc_mandelbrot_point_soft(myflpt cx, myflpt cy, uint16_t n_max) {
   do {
     // Fast escape to avoid overflow
     if (myflpt_gt(myflpt_abs(x), escape) || myflpt_gt(myflpt_abs(y), escape)) {
-        break;
+      ++n;  
+      break;
     }
 
     xx = myflpt_mul(x, x);
