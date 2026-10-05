@@ -4,6 +4,15 @@
 #include "cache.h"
 #include <stddef.h>
 #include <stdio.h>
+#include "spr.h"
+
+//! Report where a bus error comes from instead of retrying it forever:
+//! EPC is the faulting instruction, EEA the faulting data address.
+void bus_error_handler() {
+   printf("bus error: EPC=0x%08x EEA=0x%08x\n",
+          (unsigned)SPR_READ(SPR_EPC), (unsigned)SPR_READ(SPR_EEA));
+   while (1);
+}
 
 // Constants describing the output device
 const int SCREEN_WIDTH = 512;   //!< screen width
@@ -39,6 +48,12 @@ int main() {
    
    /* Clear screen */
    for (i = 0 ; i < SCREEN_WIDTH*SCREEN_HEIGHT ; i++) frameBuffer[i]=0;
+
+   /* Push the cleared frame buffer to memory now, as fractal_fxpt does,
+      instead of leaving 512 KB of dirty lines to the final flush */
+#ifdef __OR1300__
+   dcache_flush();
+#endif
 
    draw_fractal(frameBuffer, SCREEN_WIDTH, SCREEN_HEIGHT, 
                 &calc_mandelbrot_point_soft, &iter_to_colour, 

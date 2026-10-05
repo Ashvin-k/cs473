@@ -28,11 +28,12 @@ notre calcul n'utilise jamais :
 | Valeurs NaN et infinies | non |
 | Arrondi au plus proche pair (bits de garde et de collage) | non |
 | Bit de mantisse implicite, à insérer puis retirer | non |
-| Exposant biaisé, à corriger à chaque opération | non |
 | Mantisse en signe-magnitude | non |
+| Exposant biaisé, à corriger à chaque opération | non |
 
-Notre format est construit en retirant précisément ces six postes. **C'est là
-qu'est le gain**, et non dans un réglage fin des largeurs de champ.
+Notre format est construit en retirant ces postes. **C'est là qu'est le gain** :
+on garde une précision comparable au `float` (23 bits de magnitude), mais
+chaque opération se réduit à quelques instructions entières.
 
 > **Figure suggérée.** Un extrait annoté du désassemblage de la boucle en `float`,
 > faisant apparaître la succession d'appels à libgcc, avec le nombre
@@ -43,115 +44,95 @@ qu'est le gain**, et non dans un réglage fin des largeurs de champ.
 
 ## 2. Le format retenu
 
-Un nombre occupe 32 bits, découpés sur la frontière des demi-mots :
+Un nombre occupe 32 bits : 8 bits d'exposant et 24 bits de mantisse, soit un
+bit de signe et 23 bits de magnitude, comme le découpage 1-23-8 de l'énoncé.
 
 ```
- 31                    16 15                      0
-+------------------------+------------------------+
-|   exposant, 16 bits    |   mantisse, 16 bits    |
-|   complément à deux    |  signe + 15 magnitude  |
-+------------------------+------------------------+
+ 31            24 23                                          0
++----------------+---------------------------------------------+
+| exposant, 8 b  |  mantisse, 24 bits                          |
+| complément à 2 |  complément à 2 (signe + 23 magnitude)      |
++----------------+---------------------------------------------+
 
         valeur = mantisse × 2^exposant
 ```
 
-Toute valeur non nulle est **normalisée** : la magnitude de sa mantisse
-appartient à l'intervalle allant de 2¹⁴ à 2¹⁵ exclu. Elle porte donc toujours
-quinze bits significatifs, quelle que soit son ordre de grandeur. Le zéro est le
-mot entièrement nul.
+Toute valeur non nulle est **normalisée** : 2²² ≤ |mantisse| < 2²³. Elle porte
+donc toujours 23 bits significatifs, quel que soit son ordre de grandeur. Le
+zéro est le mot entièrement nul. Plage représentable : environ
+2⁻¹⁰⁶ ≤ |valeur| < 2¹⁵⁰.
 
-Deux exemples d'encodage, tels que les produit la fonction de construction :
+Deux exemples d'encodage :
 
 ```
  1.5  =  3 × 2^-1
-       magnitude 3, bit de poids fort en position 1
-       il doit arriver en position 14  ->  décalage de 13 vers la gauche
-       mantisse = 24576,  exposant = -14
-       vérification : 24576 × 2^-14 = 1.5                      ✓
+       magnitude 3, bit de poids fort en position 1, à amener en position 22
+       ->  décalage de 21 vers la gauche
+       mantisse = 0x600000,  exposant = -22 = 0xEA
+       mot = 0xEA600000
+       vérification : 6291456 × 2^-22 = 1.5                    ✓
 
--2.0  =  -2 × 2^0
-       magnitude 2, décalage de 13  ->  16384, exposant -13
-       le signe est réappliqué après normalisation  ->  -16384
-       vérification : -16384 × 2^-13 = -2.0                    ✓
+-2.0  = -2 × 2^0
+       magnitude 2, décalage de 21  ->  0x400000, exposant -21 = 0xEB
+       le signe est réappliqué après normalisation : -0x400000 = 0xC00000
+       mot = 0xEBC00000
 ```
-
-On notera que la fonction ne stocke pas le couple fourni tel quel : la
-normalisation pousse la mantisse jusqu'à remplir ses quinze bits et compense sur
-l'exposant. C'est ce qui garantit la précision maximale pour les opérations
-suivantes.
 
 > **Figure suggérée.** Le schéma du mot de 32 bits ci-dessus, accompagné d'un
 > exemple d'encodage complet montrant la valeur réelle, la mantisse, l'exposant
-> et le mot hexadécimal. C'est la figure qui rend le format compréhensible d'un
-> coup d'œil.
+> et le mot hexadécimal.
 
 ---
 
-## 3. La justification des quinze bits de mantisse
+## 3. La justification des largeurs de champ
 
-Ce choix n'est pas arbitraire. Il découle d'une contrainte unique, et tout le
-reste du format en est la conséquence.
+### La précision d'abord : 23 bits de magnitude
 
-### La contrainte
+L'itération de Mandelbrot est **chaotique** près du bord de l'ensemble : une
+erreur d'arrondi est amplifiée à chaque itération, et finit par changer le
+nombre d'itérations avant échappement, donc la couleur du pixel. Une mantisse
+courte (15 ou 16 bits, soit une précision relative de l'ordre de 10⁻⁵) produit
+nettement plus de pixels faux (voir section 5). La précision est donc la
+ressource à maximiser, et la mantisse reçoit le plus de bits possible.
 
-Pour que le produit de deux mantisses tienne dans un entier signé de 32 bits
-**sans décalage préalable**, il faut :
+### Un exposant court suffit : 8 bits
 
-```
-|ma| · |mb| < 2³¹
-```
+La plage effectivement parcourue par le calcul est petite :
 
-Avec des mantisses normalisées sous 2^k, le pire cas vaut 2^(2k). La condition
-s'écrit donc 2k ≤ 30, soit **k ≤ 15**.
+- **valeurs maximales** : le test d'échappement garantit |x|, |y| ≤ 2 avant
+  chaque multiplication, donc aucun intermédiaire ne dépasse environ 10
+  (|x² − y² + cx| ≤ 6, |2xy + cy| ≤ 10) ;
+- **valeurs minimales** : il suffit de descendre bien en dessous du pas entre
+  pixels (3/512 ≈ 2⁻⁷·⁵). Une valeur plus petite peut être ramenée à zéro sans
+  effet visible.
 
-Quinze bits est ainsi la plus grande mantisse compatible avec une multiplication
-exacte en une seule instruction machine. Au-delà, il faudrait soit amputer les
-opérandes avant de les multiplier — ce qui reviendrait à payer un champ de
-mantisse que le calcul n'exploiterait pas, exactement le défaut identifié dans la
-version à virgule fixe — soit décomposer le produit en trois multiplications.
+Huit bits couvrent environ 2⁻¹⁰⁶ à 2¹⁵⁰, ce qui est très largement suffisant,
+y compris pour zoomer. Chaque bit d'exposant supplémentaire serait un bit de
+précision perdu sans aucun bénéfice.
 
-### La conséquence en cascade
+### Le prix : un produit de 46 bits
 
-Cette contrainte produit un second effet, moins évident et tout aussi important.
-Puisque les deux mantisses appartiennent à une seule octave, leur produit est
-confiné à deux octaves :
+Avec deux magnitudes de 23 bits, le produit exact fait 46 bits et ne tient plus
+dans un registre. Les deux mauvaises solutions sont :
 
-```
-[2¹⁴ · 2¹⁴ ; 2¹⁵ · 2¹⁵[  =  [2²⁸ ; 2³⁰[
-```
+- caster en `uint64_t` : GCC appelle alors la multiplication 64 bits logicielle ;
+- décaler les opérandes avant de multiplier (`(a >> 8) * (b >> 8)`) : on retombe
+  à 15 bits de précision, et le champ de 23 bits ne sert plus à rien.
 
-Ramener ce produit dans l'intervalle de normalisation demande donc toujours un
-décalage de 14 **ou** de 15, jamais autre chose. Une simple comparaison suffit à
-trancher, et la multiplication n'a **jamais** besoin de rechercher la position du
-bit de poids fort ni d'appeler la routine de normalisation générale.
+Nous décomposons à la place le produit en **trois multiplications 32 bits**
+(section 4), ce qui donne exactement les bits de poids fort du produit.
 
 ### Le codage du signe
 
-Nous avons écarté la représentation en signe et magnitude — celle d'IEEE 754, et
-celle proposée par défaut dans l'énoncé avec son bit 31 isolé — au profit d'une
-mantisse en complément à deux.
+La mantisse est en complément à deux plutôt qu'en signe et magnitude.
+L'argument est l'addition, opération la plus fréquente de l'algorithme : une
+fois les exposants alignés, additionner deux mantisses en complément à deux se
+réduit à une addition entière. Avec un bit de signe séparé, il faudrait comparer
+les deux magnitudes, déterminer le sens de la soustraction, puis recalculer le
+signe du résultat.
 
-L'argument est l'addition, opération la plus fréquente de l'algorithme. Une fois
-les exposants alignés, additionner deux mantisses en complément à deux se réduit
-à une addition entière : une instruction. Avec un bit de signe séparé, il
-faudrait comparer les deux magnitudes, déterminer le sens de la soustraction,
-puis recalculer le signe du résultat. Ce traitement représente une part
-substantielle du coût de `__addsf3`.
-
-L'exposant est codé de la même manière, en complément à deux et **sans biais**,
-ce qui évite d'ajouter puis de retrancher une constante à chaque opération.
-
-### La largeur de l'exposant
-
-Une fois la mantisse fixée à un champ de 16 bits, les 16 restants vont à
-l'exposant. C'est surdimensionné : les grandeurs manipulées s'étendent des
-petites valeurs issues des annulations près du bord de l'ensemble jusqu'à une
-borne de l'ordre de huit, ce qui ne réclame guère plus de sept ou huit bits.
-
-Mais ces bits ne peuvent pas être rendus à la mantisse sans invalider le
-raisonnement précédent. Les affecter à l'exposant a au moins deux avantages :
-aligner les deux champs sur les demi-mots, et préserver une marge confortable si
-l'on souhaite zoomer.
+L'exposant est lui aussi en complément à deux et **sans biais**, ce qui évite
+d'ajouter puis de retrancher une constante à chaque opération.
 
 ---
 
@@ -159,81 +140,73 @@ l'on souhaite zoomer.
 
 ### La normalisation, en une étape au lieu d'une boucle
 
-C'est l'optimisation la plus rentable. La position du bit de poids fort de la
-magnitude est obtenue par la fonction `ilog2`, déjà présente dans le fichier
-fourni et jusqu'alors inutilisée ; le décalage nécessaire s'en déduit
-immédiatement par différence avec la position cible.
+La position du bit de poids fort est obtenue par `ilog2`, déjà présente dans le
+fichier fourni ; le décalage nécessaire s'en déduit par différence avec la
+position cible (bit 22). La normalisation opère sur la **valeur absolue**, le
+signe étant réappliqué ensuite : la mantisse reste strictement sous 2²³ en
+magnitude, donc son opposé est toujours représentable et la négation est
+exacte. Les valeurs trop petites sont ramenées à zéro, les valeurs trop grandes
+saturent.
 
 ```
-m = 100,  exp = 0
-ilog2(100) = 6        (100 = 0b1100100)
-décalage = 6 - 14 = -8  ->  vers la gauche de 8
-mantisse = 25600,  exposant = -8
-vérification : 25600 × 2^-8 = 100                            ✓
+3/512 = 3 × 2^-9
+ilog2(3) = 1  ->  décalage de 22 - 1 = 21 vers la gauche
+mantisse = 3 << 21 = 0x600000,  exposant = -9 - 21 = -30
+vérification : 6291456 × 2^-30 = 3/512                       ✓
 ```
-
-La version naïve y parvient par deux boucles successives qui déplacent la
-mantisse d'un bit à la fois. Sur un cœur simple, sans prédiction de branchement,
-chaque tour de ces boucles coûte un branchement non prédit et une division
-signée — et la normalisation est appelée à chaque addition.
-
-Un détail d'implémentation mérite d'être signalé : la normalisation opère sur la
-**valeur absolue**, le signe étant réappliqué en fin de parcours. Décaler
-directement une valeur négative produirait, par arrondi vers le bas du décalage
-arithmétique, la valeur la plus négative représentable sur seize bits, dont
-l'opposé n'est pas représentable : la négation deviendrait fausse. En travaillant
-sur la magnitude, la mantisse reste strictement à l'intérieur du domaine et
-toutes les opérations de signe demeurent exactes.
 
 ### La multiplication
 
-Une seule multiplication 32 × 32, exacte, suivie d'un décalage conditionnel.
-Aucun appel à la routine de normalisation, grâce à la propriété des deux octaves
-établie en section 3.
+On travaille sur les magnitudes ua et ub, le signe du résultat étant donné par
+le XOR des signes. On écrit ub = bh·2¹⁴ + bl et ua = ah·2⁹ + al
+(bh, al < 2⁹ ; bl, ah < 2¹⁴). Chaque produit partiel tient alors dans 32 bits, et
+
+```
+floor(ua × ub / 2^14) = ua·bh + ((ah·bl + ((al·bl) >> 9)) >> 5)
+```
+
+est **exact** : trois `l.mul`, aucune routine 64 bits. Comme les deux magnitudes
+sont dans [2²² ; 2²³[, ce résultat est confiné à deux octaves, [2³⁰ ; 2³²[ : la
+renormalisation est toujours un décalage de 8 ou de 9, choisi par un seul test
+du bit 31, sans appel à `ilog2`.
 
 ```
 1.5 × (-2.0)
-  mantisses 24576 et -16384, exposants -14 et -13
-  produit = -402653184,  exact,  |p| < 2³¹
-  |p| < 2²⁹  ->  décalage de 14,  exposant -27 + 14 = -13
-  mantisse = -24576
-  résultat : -24576 × 2^-13 = -3.0                           ✓
+  magnitudes 0x600000 et 0x400000,  exposants -22 et -21
+  P = 3 × 2^21 × 2^22 = 3 × 2^43
+  floor(P / 2^14) = 3 × 2^29 = 0x60000000  (bit 31 à 0)  ->  décalage de 8
+  magnitude 0x600000,  exposant -22 - 21 + 14 + 8 = -21,  signes différents
+  résultat : -6291456 × 2^-21 = -3.0                         ✓
 ```
 
 ### L'addition
 
-Alignement des exposants, addition des mantisses, renormalisation.
+Alignement des exposants, addition des mantisses, renormalisation. Les deux
+mantisses sont d'abord remontées de 7 **bits de garde** (elles restent sous 2³⁰
+en magnitude, la somme tient donc dans un `int32_t`) : les bits du plus petit
+opérande qui seraient sinon perdus à l'alignement sont conservés, ce qui compte
+pour l'annulation dans x² − y². Au-delà d'un écart d'exposant de 30, le plus
+petit opérande ne peut plus influencer le résultat et est abandonné directement.
 
 ```
 1.5 + 3/512
-  exposants -14 et -22,  écart de 8
-  la plus petite mantisse est décalée de 8 : 24576 >> 8 = 96
-  somme = 24576 + 96 = 24672,  déjà normalisée
-  résultat : 24672 × 2^-14 = 1.505859375                     ✓
+  exposants -22 et -30,  écart de 8
+  0x600000 << 7 = 0x30000000,  (0x600000 << 7) >> 8 = 0x00300000
+  somme = 0x30300000,  exposant -22 - 7 = -29
+  renormalisée : 0x606000 × 2^-22 = 1.505859375              ✓
 ```
-
-Au-delà d'un écart d'exposant de quinze, la plus petite des deux valeurs ne peut
-plus influencer le résultat : elle est abandonnée directement plutôt que décalée
-jusqu'à disparaître. Après alignement, les deux mantisses sont sous 2¹⁵, donc
-leur somme ne peut pas déborder.
 
 ### La comparaison
 
 Elle procède champ par champ : d'abord les signes, puis les exposants, puis les
 mantisses. Grâce à la normalisation, l'exposant est déterminant dès que les
-signes coïncident.
-
-La version naïve construit la différence des deux nombres et teste son signe, ce
-qui déclenche une addition **et** une normalisation complète à chaque
-comparaison, alors que l'algorithme en effectue trois par itération.
+signes coïncident. Aucune soustraction ni renormalisation n'est nécessaire.
 
 ### Le doublement du terme croisé
 
-Doubler un flottant revient à incrémenter son exposant. Comme la mantisse occupe
-les bits de poids faible du mot, ajouter 2¹⁶ incrémente l'exposant sans jamais
-propager de retenue dans le champ de mantisse. Une addition entière remplace
-donc un appel à la routine d'addition flottante, qui aurait aligné des exposants
-puis renormalisé.
+Doubler un flottant revient à incrémenter son exposant. Comme l'exposant occupe
+les bits de poids fort du mot, ajouter 2²⁴ l'incrémente sans toucher à la
+mantisse. Une addition entière remplace donc un appel à la routine d'addition.
 
 ---
 
@@ -241,9 +214,26 @@ puis renormalisé.
 
 ### Validation du calcul
 
-La correction du format se vérifie par comparaison visuelle avec la version en
-virgule flottante native : les deux rendus doivent être indiscernables, et la
-surface occupée par l'ensemble identique.
+Un portage bit à bit de l'arithmétique a été comparé à `double` sur PC :
+
+- erreur relative maximale de la multiplication et de l'addition : 2⁻²²
+  (troncature, un ulp au plus), sur 200 000 paires aléatoires ;
+- sur un échantillon de 16 384 pixels de l'image 512 × 512, le nombre
+  d'itérations diffère de celui calculé en `double` pour **2 pixels**.
+
+La même simulation, en tronquant chaque opération à d'autres largeurs de
+mantisse, justifie le découpage choisi :
+
+| Découpage (signe-magnitude-exposant) | Pixels différents de `double` |
+|---|---|
+| 1-15-16 (première version) | 98 / 16 384 |
+| **1-23-8 (retenu)** | **2 / 16 384** |
+| 1-25-6 | 4 / 16 384 |
+| 1-27-4 (exposant trop court) | 58 / 16 384 |
+
+Au-delà de 23 bits, les écarts restants relèvent du bruit sur le bord chaotique
+de l'ensemble. En dessous de 5 bits d'exposant, les petits termes du calcul sont
+ramenés à zéro et l'image se dégrade.
 
 > **Figure suggérée — indispensable.** Les deux rendus côte à côte,
 > `fractal_flpt` et `fractal_myflpt`, avec une légende indiquant leur
@@ -262,42 +252,35 @@ Mesures effectuées dans des conditions identiques, en chronométrant l'interval
 entre les deux messages qui encadrent le rendu sur la liaison série.
 
 > **Figure suggérée.** Un histogramme à trois barres comparant `fractal_flpt`,
-> `fractal_fxpt` et `fractal_myflpt`. Il synthétise les deux exercices et montre
-> où se situe chaque approche.
+> `fractal_fxpt` et `fractal_myflpt`.
 
 ### Vérification de l'absence d'émulation
 
-Un contrôle simple confirme que l'objectif de l'énoncé est atteint sur le fond et
-pas seulement sur le chronomètre : les symboles `__addsf3`, `__mulsf3`,
-`__subsf3` et `__lesf2` ne figurent plus dans le binaire de `fractal_myflpt`,
-alors qu'ils sont présents dans celui de `fractal_flpt`. La vérification se fait
-avec `or1k-elf-nm`.
+Les symboles `__addsf3`, `__mulsf3`, `__subsf3`, `__lesf2`, ainsi que
+`__muldi3`, ne doivent pas figurer dans le binaire de `fractal_myflpt`. La
+vérification se fait avec `or1k-elf-nm`.
 
 ---
 
 ## 6. Limites et comparaison avec la virgule fixe
 
-**La précision est inférieure à celle de Q4.28 à ce niveau de zoom.** Ce n'est
-pas un défaut d'implémentation mais une propriété des deux familles de formats.
-La virgule fixe offre une résolution absolue constante ; le flottant offre une
-résolution **relative** constante, donc une résolution absolue proportionnelle à
-la magnitude. Pour des valeurs d'ordre 1, qui dominent le calcul à ce cadrage, le
-pas de Q4.28 est plus fin que celui d'une mantisse de quinze bits.
+**Précision.** Avec 23 bits de magnitude, la précision relative est proche de
+celle du `float` (2⁻²³ contre 2⁻²⁴ avec le bit implicite d'IEEE 754). Pour des
+valeurs d'ordre 1, le pas de Q4.28 (2⁻²⁸) reste plus fin : la virgule fixe offre
+une résolution absolue constante, le flottant une résolution **relative**
+constante.
 
-**L'intérêt du flottant est la plage dynamique, pas la précision.** Son avantage
-apparaît en zoomant : lorsque l'écart entre deux pixels voisins descend sous la
-résolution de la virgule fixe, deux colonnes adjacentes reçoivent la même valeur
-de `c` et l'image se fige, alors que le flottant continue de les distinguer.
+**L'intérêt du flottant est la plage dynamique.** Il apparaît en zoomant :
+lorsque l'écart entre deux pixels voisins descend sous la résolution de la
+virgule fixe, deux colonnes adjacentes reçoivent la même valeur de `c` et
+l'image se fige, alors que le flottant continue de les distinguer.
 
 > **Figure suggérée — si le temps le permet.** Un même zoom profond rendu dans
-> les deux formats. Si la virgule fixe produit des aplats uniformes là où le
-> flottant conserve du détail, c'est la démonstration visuelle de l'intérêt du
-> second. C'est l'argument qui justifie l'existence de cet exercice.
+> les deux formats.
 
-**Le champ d'exposant est surdimensionné.** Sept ou huit bits suffiraient à ce
-cadrage. Les bits excédentaires ne peuvent cependant pas être transférés à la
-mantisse sans perdre la multiplication en une instruction ; ils constituent une
-marge pour le zoom plutôt qu'un gaspillage.
+**Arrondi.** Toutes les opérations tronquent au lieu d'arrondir. C'est un
+biais d'au plus un ulp par opération, invisible à ce cadrage et nettement moins
+cher qu'un arrondi au plus proche.
 
 ---
 
@@ -305,7 +288,7 @@ marge pour le zoom plutôt qu'un gaspillage.
 
 | fichier | rôle |
 |---|---|
-| `include/fractal_myflpt.h` | définition du format, macros de champ, prototypes |
+| `include/fractal_myflpt.h` | définition du format 8-24, macros de champ, prototypes |
 | `src/fractal_myflpt.c` | arithmétique, boucle de Mandelbrot, couleurs |
 | `src/main_myflpt.c` | initialisation VGA, constantes, appel du rendu |
 
