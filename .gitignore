@@ -1,4 +1,4 @@
-
+# --- Artefacts de compilation ---
 build-release-or1300/
 build-*/
 
@@ -10,10 +10,28 @@ build-*/
 *.cmem
 *.bin
 
-fractal_*/support
-fractal_*/external
+# --- Sauvegardes et resultats de fusion ---
+# Git produit des .orig et .rej lors des conflits ; on ne les versionne jamais.
+*.orig
+*.bak
+*.rej
 
+# --- Bruit des systemes de fichiers ---
+# macOS
 .DS_Store
 ._*
 .AppleDouble
 .LSOverride
+# Windows
+Thumbs.db
+desktop.ini
+
+# --- Note sur support/ et external/ ---
+# Ces dossiers etaient a l'origine des liens symboliques vers
+# programs/support et programs/external. Git sous Windows ne pouvant pas
+# les creer, ils ont ete remplaces par de vraies copies, qui sont
+# desormais versionnees. Ne pas les ignorer : le projet ne compilerait
+# plus apres un clone.
+#
+# Consequence : si l'on modifie programs/support ou programs/external,
+# il faut repercuter le changement dans la copie de chaque projet.
