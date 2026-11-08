@@ -25,11 +25,13 @@ LD = $(TOOLCHAIN)-ld
 AS = $(TOOLCHAIN)-as
 ELF2MEM ?= convert_or32
 
-CSRCS += $(wildcard support/src/*.c)
-SSRCS += $(wildcard support/src/*.s)
+# shared support library (no symlink needed)
+SUPPORT ?= ../../support
+SUPPORT_CSRCS = $(wildcard $(SUPPORT)/src/*.c)
+SUPPORT_SSRCS = $(wildcard $(SUPPORT)/src/*.s)
 
 _LDFLAGS += -nostartfiles
-_CFLAGS += -MMD -DPRINTF_INCLUDE_CONFIG_H -I include/ -I support/include
+_CFLAGS += -MMD -DPRINTF_INCLUDE_CONFIG_H -I include/ -I $(SUPPORT)/include
 
 ifeq ($(DEBUG), 1)
 BUILD = build-debug
@@ -53,6 +55,7 @@ $(error "TARGET variable must be either OR1300 or OR1420!")
 endif
 
 OBJS = $(SSRCS:%.s=$(BUILD)/%.s.o) $(CSRCS:%.c=$(BUILD)/%.c.o)
+OBJS += $(SUPPORT_SSRCS:$(SUPPORT)/%.s=$(BUILD)/support/%.s.o) $(SUPPORT_CSRCS:$(SUPPORT)/%.c=$(BUILD)/support/%.c.o)
 DEPS = $(OBJS:%.o=%.d) # dependencies
 
 ELF = $(addsuffix .elf,$(BUILD)/$(PROJECT))
@@ -85,11 +88,11 @@ $(BUILD)/src/%.s.o : src/%.s
 	$(AS) $(_ASFLAGS) $(ASFLAGS) $< -o $@
 
 # for support
-$(BUILD)/support/src/%.c.o : support/src/%.c
+$(BUILD)/support/src/%.c.o : $(SUPPORT)/src/%.c
 	mkdir -p $(@D)
 	$(CC) $(_CFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/support/src/%.s.o : support/src/%.s
+$(BUILD)/support/src/%.s.o : $(SUPPORT)/src/%.s
 	mkdir -p $(@D)
 	$(AS) $(_ASFLAGS) $(ASFLAGS) $< -o $@
 
