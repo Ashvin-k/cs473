@@ -35,3 +35,18 @@ desktop.ini
 #
 # Consequence : si l'on modifie programs/support ou programs/external,
 # il faut repercuter le changement dans la copie de chaque projet.
+
+# --- Copies locales de support/ et external/ (pw3, pw4) ---
+# Dans ces projets, support et external sont versionnes comme des liens
+# symboliques (fichiers texte sous Windows). On les remplace localement par
+# des copies de programs/support et programs/external pour pouvoir compiler,
+# mais ces copies ne doivent pas etre poussees. Les fichiers-liens d'origine
+# sont marques localement avec : git update-index --skip-worktree <chemin>
+virtualprototype/programs/pw3/exceptions/support/
+virtualprototype/programs/pw3/exceptions/external/
+virtualprototype/programs/pw3/fractal_fxpt_sol/support/
+virtualprototype/programs/pw3/fractal_fxpt_sol/external/
+virtualprototype/programs/pw4/cache/sweep/support/
+virtualprototype/programs/pw4/cache/sweep/external/
+virtualprototype/programs/pw4/cache/tasks/support/
+virtualprototype/programs/pw4/cache/tasks/external/

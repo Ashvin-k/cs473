@@ -97,9 +97,50 @@ def plot2(data: List[Row]):
 
     fig.savefig("plot2.pdf")
 
+    
+def plot3(data: List[Row]):
+    # misses vs datalen, not packed only, with the exact value of each plateau
+    print("plot3")
+    fig, axes = fig_axes(
+        "Data Cache Misses (Not Packed)", "Number of Misses", "Data Length (bytes)")
+
+    rows = sorted(filter(lambda x: not x.packed and x.count == COUNT, data),
+                  key=lambda x: x.datalen)
+    x = [r.datalen for r in rows]
+    y = [r.misses for r in rows]
+
+    axes.grid()
+    axes.set_xticks([0, 4, 8, 12, 16, 20, 24, 28, 32])
+
+    # Same color as the "Not Packed" curve of plot2 (2nd default color).
+    axes.plot(x, y, label="Not Packed", marker="o", color="C1")
+
+    # A plateau is a run of consecutive points sharing the same sizeof(item_t).
+    plateaus: List[List[Row]] = []
+    for r in rows:
+        if plateaus and plateaus[-1][-1].sizeof == r.sizeof:
+            plateaus[-1].append(r)
+        else:
+            plateaus.append([r])
+
+    for p in plateaus:
+        misses = [r.misses for r in p]
+        lo, hi = min(misses), max(misses)
+        label = f"{lo}" if lo == hi else f"{lo}-{hi}"
+        xc = (p[0].datalen + p[-1].datalen) / 2
+        axes.annotate(label, xy=(xc, hi), xytext=(0, 8),
+                      textcoords="offset points", ha="center", va="bottom",
+                      fontsize=11, color="C1", fontweight="bold")
+
+    axes.set_ylim(top=max(y) * 1.12)
+    axes.legend(loc="lower right")
+
+    fig.savefig("plot3.pdf")
+
 
 if __name__ == "__main__":
     set_font()
     data = load_data("data.txt")
     plot1(data)
     plot2(data)
+    plot3(data)

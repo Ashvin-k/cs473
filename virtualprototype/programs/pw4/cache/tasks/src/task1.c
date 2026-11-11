@@ -15,17 +15,19 @@ static void print_layout() {
 
     uint32_t addr0 = (uint32_t)&node;
     uint32_t addr1 = (uint32_t)&node.id;
-    uint32_t addr2 = (uint32_t)node.data;
-    uint32_t addr3 = (uint32_t)&node.next;
-    uint32_t addr4 = (uint32_t)&node.prev;
+    uint32_t addr2 = (uint32_t)&node.next;
+    uint32_t addr3 = (uint32_t)&node.prev;
+    uint32_t addr4 = (uint32_t)node.data;
+   
 
     printf("sizeof(node_t) = %d:\n", sizeof(node_t));
     printf("struct layout for node_t:\n");
     printf("member        -> offset\n");
     printf("node.id       -> 0x%03x\n", addr1 - addr0);
-    printf("node.data     -> 0x%03x\n", addr2 - addr0);
-    printf("node.next     -> 0x%03x\n", addr3 - addr0);
-    printf("node.prev     -> 0x%03x\n", addr4 - addr0);
+    printf("node.next     -> 0x%03x\n", addr2 - addr0);
+    printf("node.prev     -> 0x%03x\n", addr3 - addr0);
+    printf("node.data     -> 0x%03x\n", addr4 - addr0);
+
 }
 
 void task1_main() {
