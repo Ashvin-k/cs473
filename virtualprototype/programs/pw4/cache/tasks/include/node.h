@@ -28,7 +28,7 @@ struct node_t {
     /** @brief Node data. */
     char data[NODE_DATALEN];
 
-};s
+};
 
 /**
  * @brief Initializes the nodes randomly.
